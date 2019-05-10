@@ -2,6 +2,7 @@ package org.jvnet.hudson.maven3.launcher;
 
 /*
  * Copyright Olivier Lamy
+ * Copyright GEBIT Solutions GmbH
  * Licensed to the Apache Software Foundation (ASF) under one
  * or more contributor license agreements.  See the NOTICE file
  * distributed with this work for additional information
@@ -20,28 +21,23 @@ package org.jvnet.hudson.maven3.launcher;
  * under the License.
  */
 
-import org.apache.maven.Maven;
-import org.apache.maven.cli.MavenExecutionRequestBuilder;
-import org.apache.maven.cli.logging.Slf4jLoggerManager;
-import org.apache.maven.eventspy.EventSpy;
-import org.apache.maven.eventspy.internal.EventSpyDispatcher;
-import org.apache.maven.execution.ExecutionListener;
-import org.apache.maven.execution.MavenExecutionRequest;
-import org.apache.maven.execution.MavenExecutionResult;
-import org.codehaus.plexus.ContainerConfiguration;
-import org.codehaus.plexus.DefaultContainerConfiguration;
-import org.codehaus.plexus.DefaultPlexusContainer;
-import org.codehaus.plexus.PlexusConstants;
-import org.codehaus.plexus.classworlds.ClassWorld;
-import org.codehaus.plexus.classworlds.realm.ClassRealm;
-import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
-import org.jvnet.hudson.maven3.listeners.HudsonMavenExecutionResult;
-
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.maven.cli.MavenCli;
+import org.apache.maven.eventspy.EventSpy;
+import org.apache.maven.eventspy.internal.EventSpyDispatcher;
+import org.apache.maven.execution.ExecutionListener;
+import org.apache.maven.execution.MavenExecutionResult;
+import org.codehaus.plexus.PlexusContainer;
+import org.codehaus.plexus.classworlds.ClassWorld;
+import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
+import org.jvnet.hudson.maven3.listeners.HudsonMavenExecutionResult;
+
 /**
  * @author Olivier Lamy
+ * @author GEBIT Solutions GmbH
  * @since 1.9
  */
 public class Maven35Launcher
@@ -84,76 +80,85 @@ public class Maven35Launcher
     }
 
     public static int main(String[] args , ClassWorld classWorld)
-        throws Exception
-    {
+            throws Exception
+        {
+        final MavenExecutionResult[] result = new MavenExecutionResult[1];
+
+        File workingDirectory = new File("");
+        System.setProperty(MavenCli.MULTIMODULE_PROJECT_DIRECTORY, workingDirectory.getAbsolutePath());
+
         ClassLoader orig = Thread.currentThread().getContextClassLoader();
         try
         {
+            MavenCli mavenCli = new MavenCli(classWorld) {
 
-            ClassRealm containerRealm = (ClassRealm) Thread.currentThread().getContextClassLoader();
+                @Override
+                protected void customizeContainer(PlexusContainer container) {
+                    try 
+                    {
+                        EventSpyDispatcher eventSpyDispatcher = container.lookup(EventSpyDispatcher.class);
 
-            ContainerConfiguration cc =
-                new DefaultContainerConfiguration().setName( "maven" ).setRealm( containerRealm ).setClassPathScanning(
-                    PlexusConstants.SCANNING_INDEX ).setAutoWiring( true );
+                        if (eventSpiesList != null && !eventSpiesList.isEmpty())
+                        {
+                            List<EventSpy> eventSpies = eventSpyDispatcher.getEventSpies();
+                            if (eventSpies == null)
+                            {
+                                eventSpies = new ArrayList<EventSpy>(1);
+                            }
+                            eventSpies.addAll(eventSpiesList);
 
-            DefaultPlexusContainer container = new DefaultPlexusContainer( cc );
-            Slf4jLoggerManager mavenLoggerManager = new Slf4jLoggerManager();
-            container.setLoggerManager( mavenLoggerManager );
+                            // get event spies added with plexus components
+                            // see Maven31Maven addPlexusComponents
+                            // PlexusModuleContributor extension
+                            List<EventSpy> spies = container.lookupList(EventSpy.class);
+                            if (spies != null && !spies.isEmpty())
+                            {
+                                eventSpies.addAll(spies);
+                            }
 
-            Maven maven = (Maven) container.lookup( "org.apache.maven.Maven", "default" );
+                            eventSpies.add( new EventSpy()
+                            {
 
-            EventSpyDispatcher eventSpyDispatcher = container.lookup( EventSpyDispatcher.class );
+                                @Override
+                                public void onEvent(Object event) throws Exception
+                                {
+                                    if ( event instanceof MavenExecutionResult )
+                                    {
+                                        result[0] = (MavenExecutionResult) event;
+                                    }
+                                }
 
-            if ( eventSpiesList != null && !eventSpiesList.isEmpty())
-            {
-                List<EventSpy> eventSpies = eventSpyDispatcher.getEventSpies();
-                if ( eventSpies == null )
-                {
-                    eventSpies = new ArrayList<EventSpy>( 1 );
+                                @Override
+                                public void init(Context context) throws Exception
+                                {
+                                    // nothing
+                                }
+
+                                @Override
+                                public void close() throws Exception
+                                {
+                                    // nothing
+                                }
+                            });
+                            eventSpyDispatcher.setEventSpies( eventSpies );
+                        }
+                    } catch (ComponentLookupException ex) {
+                        throw new IllegalArgumentException("Failed to setup EventSpy", ex);
+                    }
                 }
-                eventSpies.addAll( eventSpiesList );
+            };
 
-                // get event spies added with plexus components
-                // see Maven31Maven addPlexusComponents
-                // PlexusModuleContributor extension
-                List<EventSpy> spies = container.lookupList( EventSpy.class );
-                if (spies != null && !spies.isEmpty())
-                {
-                    eventSpies.addAll( spies );
-                }
+            // we need to use this doMain to use overwritten customizeContainer
+            mavenCli.doMain(args, workingDirectory.getAbsolutePath(), null, null);
 
-                eventSpyDispatcher.setEventSpies( eventSpies );
-            }
-
-            MavenExecutionRequest request = getMavenExecutionRequest( args, container );
-
-            MavenExecutionResult result = maven.execute( request );
-            hudsonMavenExecutionResult = new HudsonMavenExecutionResult( result );
+            hudsonMavenExecutionResult = new HudsonMavenExecutionResult(result[0]);
 
             // we don't care about cli mavenExecutionResult will be study in the the plugin
-            return 0;// cli.doMain( args, null );
-        }
-        catch ( ComponentLookupException e )
-        {
-            throw new Exception( e.getMessage(), e );
-        }
-        finally
-        {
-            Thread.currentThread().setContextClassLoader( orig );
+            return 0;
+        } catch (IllegalArgumentException ex) {
+            throw new Exception(ex.getCause().getMessage(), ex.getCause());
+        } finally {
+            Thread.currentThread().setContextClassLoader(orig);
         }
     }
-
-    private static MavenExecutionRequest getMavenExecutionRequest( String[] args, DefaultPlexusContainer container )
-        throws Exception
-    {
-        MavenExecutionRequestBuilder mavenExecutionRequestBuilder =
-            container.lookup( MavenExecutionRequestBuilder.class );
-        MavenExecutionRequest request = mavenExecutionRequestBuilder.getMavenExecutionRequest( args, System.out );
-        if ( mavenExecutionListener != null )
-        {
-            request.setExecutionListener( mavenExecutionListener );
-        }
-        return request;
-    }
-
 }
