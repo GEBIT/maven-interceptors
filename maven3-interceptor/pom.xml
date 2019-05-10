@@ -29,6 +29,11 @@
       <artifactId>maven-aether-provider</artifactId>
       <version>${maven3.0.x.version}</version>
     </dependency>          
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-api</artifactId>
+      <version>1.7.4</version>
+    </dependency>     
     
     <dependency>
       <groupId>org.sonatype.sisu</groupId>
@@ -55,6 +60,34 @@
             </goals>
           </execution>
         </executions>        
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-shade-plugin</artifactId>
+        <version>3.2.1</version>
+        <configuration>
+        	<artifactSet>
+				<includes>
+					<include>org.slf4j:slf4j-api</include>
+				</includes>
+        	</artifactSet>
+			<filters>
+				<filter>
+					<artifact>org.slf4j:slf4j-api</artifact>
+					<includes>
+						<include>org/slf4j/**</include>
+					</includes>
+				</filter>
+			</filters>
+        </configuration>
+        <executions>
+          <execution>
+            <phase>package</phase>
+            <goals>
+              <goal>shade</goal>
+            </goals>
+          </execution>
+        </executions>
       </plugin>
     </plugins>  
   </build>
