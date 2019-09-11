@@ -12,5 +12,5 @@ work
 .classpath
 .project
 build
-
-
+.factorypath
+.apt_generated/
